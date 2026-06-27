@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>试制报价系统</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <script src="https://unpkg.com/vue-router@4/dist/vue-router.global.js"></script>
+  <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css">
+  <script src="https://unpkg.com/element-plus/dist/index.full.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
+    .el-menu-vertical-demo { height: calc(100% - 60px); border-right: none; }
+    .logo { color: #fff; font-size: 20px; padding: 20px; text-align: center; border-bottom: 1px solid #405060; }
+    .flex { display: flex; }
+    .justify-between { justify-content: space-between; }
+    .items-center { align-items: center; }
+    .page-content { padding: 20px; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script>
+    const { createApp, ref, computed, onMounted, watch, h } = Vue
+    const { createRouter, createWebHashHistory } = VueRouter
+    const { ElMessage, ElMessageBox } = ElementPlus
+
+    const API_BASE = '/api'
+
+    const costBaselineApi = {
+      getAll: () => axios.get(`${API_BASE}/cost-baseline`),
+      create: (data) => axios.post(`${API_BASE}/cost-baseline`, data)
+    }
+
+    const workProcessApi = {
+      getAll: () => axios.get(`${API_BASE}/work-process`)
+    }
+
+    const quotationApi = {
+      getAll: (params) => axios.get(`${API_BASE}/quotation`, { params }),
+      getById: (id) => axios.get(`${API_BASE}/quotation/${id}`),
+      create: (data) => axios.post(`${API_BASE}/quotation`, data),
+      delete: (id) => axios.delete(`${API_BASE}/quotation/${id}`),
+      submit: (id) => axios.post(`${API_BASE}/quotation/${id}/submit`)
+    }
+
+    const approvalApi = {
+      finance: (id, data) => axios.post(`${API_BASE}/approval/${id}/finance`, data),
+      sales: (id, data) => axios.post(`${API_BASE}/approval/${id}/sales`, data),
+      businessManager: (id, data) => axios.post(`${API_BASE}/approval/${id}/business-manager`, data),
+      financeManager: (id, data) => axios.post(`${API_BASE}/approval/${id}/finance-manager`, data)
+    }
+
+    const statusMap = {
+      draft: '草稿',
+      pending_finance: '待财务审核',
+      pending_sales: '待销售审核',
+      pending_business_manager: '待业务主管审核',
+      pending_finance_manager: '待财务主管审核',
+      approved: '已敲定'
+    }
+
+    const statusTagType = {
+      draft: 'info',
+      pending_finance: 'warning',
+      pending_sales: 'warning',
+      pending_business_manager: 'warning',
+      pending_finance_manager: 'warning',
+      approved: 'success'
+    }
+
+    const roleNames = {
+      engineer: '工程师',
+      finance: '财务',
+      sales: '销售',
+      business_manager: '业务主管',
+      finance_manager: '财务主管'
+    }
+
+    const roleToStatus = {
+      finance: 'pending_finance',
+      sales: 'pending_sales',
+      business_manager: 'pending_business_manager',
+      finance_manager: 'pending_finance_manager'
+    }
+
+    const CostBaselineView = {
+      template: `
+        <div class="page-content">
+          <el-card>
+            <template #header>
+              <div class="flex justify-between items-center">
+                <span>成本基线管理</span>
+                <el-button type="primary" @click="openDialog">新增年度成本数据</el-button>
+              </div>
+            </template>
+            <el-table :data="tableData" style="width: 100%">
+              <el-table-column prop="year" label="年度" width="100" />
+              <el-table-column prop="machine_hourly_rate" label="机器单小时报价(元)" width="180" />
+              <el-table-column prop="labor_hourly_rate" label="人力单小时成本(元)" width="180" />
+              <el-table-column prop="overhead_rate" label="公共分摊率(%)" width="150" />
+              <el-table-column prop="utility_rate" label="水电费率(%)" width="150" />
+              <el-table-column prop="updated_at" label="更新时间" width="200" />
+            </el-table>
+          </el-card>
+          <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑成本基线' : '新增成本基线'" width="500px">
+            <el-form :model="form" label-width="150px">
+              <el-form-item label="年度">
+                <el-input-number v-model="form.year" :min="2000" :max="2100" />
+              </el-form-item>
+              <el-form-item label="机器单小时报价(元)">
+                <el-input-number v-model="form.machine_hourly_rate" :min="0" step="0.5" />
+              </el-form-item>
+              <el-form-item label="人力单小时成本(元)">
+                <el-input-number v-model="form.labor_hourly_rate" :min="0" step="0.5" />
+              </el-form-item>
+              <el-form-item label="公共分摊率(%)">
+                <el-input-number v-model="form.overhead_rate" :min="0" :max="100" step="0.1" />
+              </el-form-item>
+              <el-form-item label="水电费率(%)">
+                <el-input-number v-model="form.utility_rate" :min="0" :max="100" step="0.1" />
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="dialogVisible = false">取消</el-button>
+              <el-button type="primary" @click="submitForm">确定</el-button>
+            </template>
+          </el-dialog>
+        </div>
+      `,
+      setup() {
+        const tableData = ref([])
+        const dialogVisible = ref(false)
+        const isEdit = ref(false)
+        const form = ref({
+          year: new Date().getFullYear(),
+          machine_hourly_rate: 0,
+          labor_hourly_rate: 0,
+          overhead_rate: 0,
+          utility_rate: 0
+        })
+
+        const loadData = async () => {
+          try {
+            const res = await costBaselineApi.getAll()
+            tableData.value = res.data
+          } catch (e) {
+            ElMessage.error('加载失败')
+          }
+        }
+
+        const openDialog = () => {
+          isEdit.value = false
+          form.value = {
+            year: new Date().getFullYear(),
+            machine_hourly_rate: 0,
+            labor_hourly_rate: 0,
+            overhead_rate: 0,
+            utility_rate: 0
+          }
+          dialogVisible.value = true
+        }
+
+        const submitForm = async () => {
+          try {
+            await costBaselineApi.create(form.value)
+            ElMessage.success('操作成功')
+            dialogVisible.value = false
+            loadData()
+          } catch (e) {
+            ElMessage.error('操作失败')
+          }
+        }
+
+        onMounted(loadData)
+        return { tableData, dialogVisible, isEdit, form, openDialog, submitForm }
+      }
+    }
+
+    const WorkProcessView = {
+      template: `
+        <div class="page-content">
+          <el-card>
+            <template #header>
+              <div class="flex justify-between items-center">
+                <span>工作环节管理</span>
+              </div>
+            </template>
+            <el-table :data="tableData" style="width: 100%">
+              <el-table-column prop="id" label="ID" width="60" />
+              <el-table-column prop="name" label="名称" width="120" />
+              <el-table-column prop="description" label="描述" />
+              <el-table-column prop="machine_required" label="是否需要机器" width="120">
+                <template #default="scope">
+                  <el-tag :type="scope.row.machine_required ? 'success' : 'info'">
+                    {{ scope.row.machine_required ? '需要' : '不需要' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="is_active" label="状态" width="100">
+                <template #default="scope">
+                  <el-tag :type="scope.row.is_active ? 'success' : 'danger'">
+                    {{ scope.row.is_active ? '启用' : '禁用' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-card>
+        </div>
+      `,
+      setup() {
+        const tableData = ref([])
+
+        const loadData = async () => {
+          try {
+            const res = await workProcessApi.getAll()
+            tableData.value = res.data
+          } catch (e) {
+            ElMessage.error('加载失败')
+          }
+        }
+
+        onMounted(loadData)
+        return { tableData }
+      }
+    }
+
+    const QuotationListView = {
+      template: `
+        <div class="page-content">
+          <el-card>
+            <template #header>
+              <div class="flex justify-between items-center">
+                <span>报价单列表</span>
+                <el-button type="primary" @click="$router.push('/create-quotation')">创建报价单</el-button>
+              </div>
+            </template>
+            <div style="margin-bottom: 20px">
+              <el-input v-model="keyword" placeholder="搜索报价单号、标题或客户名称" style="width: 300px; margin-right: 10px" />
+              <el-select v-model="statusFilter" placeholder="状态筛选">
+                <el-option label="全部" value="" />
+                <el-option label="草稿" value="draft" />
+                <el-option label="待财务审核" value="pending_finance" />
+                <el-option label="待销售审核" value="pending_sales" />
+                <el-option label="待业务主管审核" value="pending_business_manager" />
+                <el-option label="待财务主管审核" value="pending_finance_manager" />
+                <el-option label="已敲定" value="approved" />
+              </el-select>
+              <el-button type="primary" @click="loadData">搜索</el-button>
+            </div>
+            <el-table :data="tableData" style="width: 100%">
+              <el-table-column prop="code" label="报价单号" width="150" />
+              <el-table-column prop="title" label="标题" />
+              <el-table-column prop="customer_name" label="客户名称" width="120" />
+              <el-table-column prop="total_cost" label="完全成本" width="120">
+                <template #default="scope">{{ (scope.row.total_cost || 0).toFixed(2) }}</template>
+              </el-table-column>
+              <el-table-column prop="final_price" label="最终定价" width="120">
+                <template #default="scope">{{ (scope.row.final_price || 0).toFixed(2) }}</template>
+              </el-table-column>
+              <el-table-column prop="status" label="状态" width="150">
+                <template #default="scope">
+                  <el-tag :type="getStatusTagType(scope.row.status)">{{ getStatusText(scope.row.status) }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="engineer_name" label="工程师" width="100" />
+              <el-table-column prop="created_at" label="创建时间" width="180" />
+              <el-table-column label="操作" width="200">
+                <template #default="scope">
+                  <el-button size="small" @click="viewDetail(scope.row)">查看</el-button>
+                  <el-button v-if="scope.row.status === 'draft'" size="small" type="danger" @click="deleteQuotation(scope.row)">删除</el-button>
+                  <el-button v-if="scope.row.status === 'draft'" size="small" @click="submitQuotation(scope.row)">提交审核</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-card>
+        </div>
+      `,
+      setup() {
+        const tableData = ref([])
+        const keyword = ref('')
+        const statusFilter = ref('')
+        const router = VueRouter.useRouter()
+
+        const getStatusText = (status) => statusMap[status] || status
+        const getStatusTagType = (status) => statusTagType[status] || 'info'
+
+        const loadData = async () => {
+          try {
+            const params = {}
+            if (statusFilter.value) params.status = statusFilter.value
+            if (keyword.value) params.keyword = keyword.value
+            const res = await quotationApi.getAll(params)
+            tableData.value = res.data
+          } catch (e) {
+            ElMessage.error('加载失败')
+          }
+        }
+
+        const viewDetail = (row) => {
+          router.push(`/quotation/${row.id}`)
+        }
+
+        const deleteQuotation = async (row) => {
+          try {
+            await quotationApi.delete(row.id)
+            ElMessage.success('删除成功')
+            loadData()
+          } catch (e) {
+            ElMessage.error('删除失败')
+          }
+        }
+
+        const submitQuotation = async (row) => {
+          try {
+            await quotationApi.submit(row.id)
+            ElMessage.success('提交成功')
+            loadData()
+          } catch (e) {
+            ElMessage.error('提交失败')
+          }
+        }
+
+        onMounted(loadData)
+        return { tableData, keyword, statusFilter, getStatusText, getStatusTagType, loadData, viewDetail, deleteQuotation, submitQuotation }
+      }
+    }
+
+    const CreateQuotationView = {
+      template: `
+        <div class="page-content">
+          <el-card>
+            <template #header>
+              <span>创建报价单</span>
+            </template>
+            <el-form :model="form" label-width="120px">
+              <el-row :gutter="20">
+                <el-col :span="12">
+                  <el-form-item label="报价标题">
+                    <el-input v-model="form.title" placeholder="请输入报价标题" />
+                  </el-form-item>
+                </el-col>
+                <el-col :span="12">
+                  <el-form-item label="客户名称">
+                    <el-input v-model="form.customer_name" placeholder="请输入客户名称" />
+                  </el-form-item>
+                </el-col>
+              </el-row>
+              <el-row :gutter="20">
+                <el-col :span="12">
+                  <el-form-item label="成本基线年度">
+                    <el-select v-model="form.cost_baseline_year" placeholder="请选择年度">
+                      <el-option v-for="year in availableYears" :key="year" :label="year + '年'" :value="year" />
+                    </el-select>
+                  </el-form-item>
+                </el-col>
+                <el-col :span="12">
+                  <el-form-item label="工程师">
+                    <el-input v-model="form.engineer_name" placeholder="请输入工程师姓名" />
+                  </el-form-item>
+                </el-col>
+              </el-row>
+            </el-form>
+            <div style="margin-top: 20px">
+              <el-button type="primary" @click="addWorkProcess">添加工作环节</el-button>
+            </div>
+            <el-table :data="form.details" style="width: 100%; margin-top: 20px">
+              <el-table-column label="工作环节" width="150">
+                <template #default="scope">
+                  <el-select v-model="scope.row.work_process_name" @change="onProcessChange(scope.row)" placeholder="请选择">
+                    <el-option v-for="p in workProcesses" :key="p.id" :label="p.name" :value="p.name" />
+                  </el-select>
+                </template>
+              </el-table-column>
+              <el-table-column label="机器工时(小时)" width="150">
+                <template #default="scope">
+                  <el-input-number v-model="scope.row.machine_hours" :min="0" step="0.5" @change="calculateCost" />
+                </template>
+              </el-table-column>
+              <el-table-column label="人工工时(小时)" width="150">
+                <template #default="scope">
+                  <el-input-number v-model="scope.row.labor_hours" :min="0" step="0.5" @change="calculateCost" />
+                </template>
+              </el-table-column>
+              <el-table-column label="人数" width="100">
+                <template #default="scope">
+                  <el-input-number v-model="scope.row.labor_count" :min="1" :max="100" @change="calculateCost" />
+                </template>
+              </el-table-column>
+              <el-table-column label="机器成本" width="120">
+                <template #default="scope">{{ (scope.row.machine_cost || 0).toFixed(2) }}</template>
+              </el-table-column>
+              <el-table-column label="人工成本" width="120">
+                <template #default="scope">{{ (scope.row.labor_cost || 0).toFixed(2) }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="80">
+                <template #default="scope">
+                  <el-button size="small" type="danger" @click="removeWorkProcess(scope.$index)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-divider />
+            <el-card style="margin-top: 20px">
+              <template #header><span>成本核算</span></template>
+              <el-row :gutter="20" style="margin-bottom: 10px">
+                <el-col :span="6">机器成本合计: <strong>{{ totalMachineCost.toFixed(2) }}</strong></el-col>
+                <el-col :span="6">人工成本合计: <strong>{{ totalLaborCost.toFixed(2) }}</strong></el-col>
+                <el-col :span="6">公共分摊: <strong>{{ totalOverhead.toFixed(2) }}</strong></el-col>
+                <el-col :span="6">水电费: <strong>{{ totalUtility.toFixed(2) }}</strong></el-col>
+              </el-row>
+              <el-divider />
+              <el-row>
+                <el-col :span="24" style="text-align: right">
+                  <span style="font-size: 18px; font-weight: bold; color: #e6a23c">完全成本：{{ totalCost.toFixed(2) }} 元</span>
+                </el-col>
+              </el-row>
+            </el-card>
+            <div style="margin-top: 20px; text-align: right">
+              <el-button @click="resetForm">重置</el-button>
+              <el-button type="primary" @click="saveDraft">保存草稿</el-button>
+              <el-button type="success" @click="submitQuotation">提交审核</el-button>
+            </div>
+          </el-card>
+        </div>
+      `,
+      setup() {
+        const form = ref({
+          title: '',
+          customer_name: '',
+          cost_baseline_year: new Date().getFullYear(),
+          engineer_name: '',
+          details: []
+        })
+        const costBaselines = ref([])
+        const workProcesses = ref([])
+
+        const availableYears = computed(() => costBaselines.value.map(c => c.year))
+        const currentBaseline = computed(() => costBaselines.value.find(c => c.year === form.value.cost_baseline_year))
+
+        const totalMachineCost = computed(() => form.value.details.reduce((sum, d) => sum + (d.machine_cost || 0), 0))
+        const totalLaborCost = computed(() => form.value.details.reduce((sum, d) => sum + (d.labor_cost || 0), 0))
+        const totalOverhead = computed(() => currentBaseline.value ? totalLaborCost.value * (currentBaseline.value.overhead_rate / 100) : 0)
+        const totalUtility = computed(() => currentBaseline.value ? totalMachineCost.value * (currentBaseline.value.utility_rate / 100) : 0)
+        const totalCost = computed(() => totalMachineCost.value + totalLaborCost.value + totalOverhead.value + totalUtility.value)
+
+        const loadData = async () => {
+          try {
+            const [bRes, pRes] = await Promise.all([costBaselineApi.getAll(), workProcessApi.getAll()])
+            costBaselines.value = bRes.data
+            workProcesses.value = pRes.data
+          } catch (e) {
+            ElMessage.error('加载失败')
+          }
+        }
+
+        const addWorkProcess = () => {
+          form.value.details.push({ work_process_id: 0, work_process_name: '', machine_hours: 0, labor_hours: 0, labor_count: 1, machine_cost: 0, labor_cost: 0 })
+        }
+
+        const removeWorkProcess = (index) => {
+          form.value.details.splice(index, 1)
+        }
+
+        const onProcessChange = (detail) => {
+          const process = workProcesses.value.find(p => p.name === detail.work_process_name)
+          if (process) {
+            detail.work_process_id = process.id
+            if (!process.machine_required) detail.machine_hours = 0
+            calculateCost()
+          }
+        }
+
+        const calculateCost = () => {
+          if (!currentBaseline.value) return
+          form.value.details.forEach(detail => {
+            detail.machine_cost = detail.machine_hours * currentBaseline.value.machine_hourly_rate
+            detail.labor_cost = detail.labor_hours * detail.labor_count * currentBaseline.value.labor_hourly_rate
+          })
+        }
+
+        const resetForm = () => {
+          form.value = { title: '', customer_name: '', cost_baseline_year: new Date().getFullYear(), engineer_name: '', details: [] }
+        }
+
+        const saveDraft = async () => {
+          if (!form.value.title || form.value.details.length === 0) {
+            ElMessage.warning('请填写报价标题并至少添加一个工作环节')
+            return
+          }
+          try {
+            await quotationApi.create({ ...form.value, status: 'draft' })
+            ElMessage.success('保存成功')
+            resetForm()
+          } catch (e) {
+            ElMessage.error('保存失败')
+          }
+        }
+
+        const submitQuotation = async () => {
+          if (!form.value.title || form.value.details.length === 0) {
+            ElMessage.warning('请填写报价标题并至少添加一个工作环节')
+            return
+          }
+          try {
+            const res = await quotationApi.create({ ...form.value, status: 'draft' })
+            await quotationApi.submit(res.data.id)
+            ElMessage.success('提交成功')
+            resetForm()
+          } catch (e) {
+            ElMessage.error('提交失败')
+          }
+        }
+
+        onMounted(loadData)
+        return { form, workProcesses, availableYears, totalMachineCost, totalLaborCost, totalOverhead, totalUtility, totalCost, addWorkProcess, removeWorkProcess, onProcessChange, calculateCost, resetForm, saveDraft, submitQuotation }
+      }
+    }
+
+    const QuotationDetailView = {
+      template: `
+        <div class="page-content">
+          <el-card>
+            <template #header>
+              <div class="flex justify-between items-center">
+                <div>
+                  <span style="font-size: 18px; font-weight: bold">{{ quotation.code }} - {{ quotation.title }}</span>
+                  <el-tag :type="getStatusTagType(quotation.status)" style="margin-left: 10px">{{ getStatusText(quotation.status) }}</el-tag>
+                </div>
+                <el-button @click="$router.back()">返回列表</el-button>
+              </div>
+            </template>
+            <el-descriptions :column="4" border style="margin-bottom: 20px">
+              <el-descriptions-item label="客户名称">{{ quotation.customer_name || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="成本基线年度">{{ quotation.cost_baseline_year }}年</el-descriptions-item>
+              <el-descriptions-item label="工程师">{{ quotation.engineer_name || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="创建时间">{{ quotation.created_at || '-' }}</el-descriptions-item>
+            </el-descriptions>
+            <el-divider content-position="left">工作环节明细</el-divider>
+            <el-table :data="quotation.details" style="width: 100%; margin-bottom: 20px">
+              <el-table-column prop="work_process_name" label="工作环节" width="150" />
+              <el-table-column prop="machine_hours" label="机器工时(小时)" width="150" />
+              <el-table-column prop="labor_hours" label="人工工时(小时)" width="150" />
+              <el-table-column prop="labor_count" label="人数" width="100" />
+              <el-table-column prop="machine_cost" label="机器成本" width="120">
+                <template #default="scope">{{ (scope.row.machine_cost || 0).toFixed(2) }}</template>
+              </el-table-column>
+              <el-table-column prop="labor_cost" label="人工成本" width="120">
+                <template #default="scope">{{ (scope.row.labor_cost || 0).toFixed(2) }}</template>
+              </el-table-column>
+            </el-table>
+            <el-divider content-position="left">成本核算</el-divider>
+            <el-card style="margin-bottom: 20px">
+              <el-row :gutter="20" style="margin-bottom: 10px">
+                <el-col :span="6">机器成本: <strong>{{ (quotation.total_machine_cost || 0).toFixed(2) }}</strong></el-col>
+                <el-col :span="6">人工成本: <strong>{{ (quotation.total_labor_cost || 0).toFixed(2) }}</strong></el-col>
+                <el-col :span="6">公共分摊: <strong>{{ (quotation.total_overhead || 0).toFixed(2) }}</strong></el-col>
+                <el-col :span="6">水电费: <strong>{{ (quotation.total_utility || 0).toFixed(2) }}</strong></el-col>
+              </el-row>
+              <el-divider />
+              <el-row :gutter="20">
+                <el-col :span="6">完全成本: <strong style="color: #e6a23c">{{ (quotation.total_cost || 0).toFixed(2) }}</strong></el-col>
+                <el-col :span="6">加成率: <strong>{{ (quotation.markup_rate || 0) }}%</strong></el-col>
+                <el-col :span="6">加成后: <strong>{{ (quotation.price_after_markup || 0).toFixed(2) }}</strong></el-col>
+                <el-col :span="6">最终定价: <strong style="color: #409eff">{{ (quotation.final_price || 0).toFixed(2) }}</strong></el-col>
+              </el-row>
+            </el-card>
+            <el-divider content-position="left">审批记录</el-divider>
+            <el-timeline>
+              <el-timeline-item v-for="r in quotation.approvalRecords" :key="r.id" :type="r.action === 'approve' ? 'success' : 'danger'" :timestamp="r.created_at">
+                <div>
+                  <span style="font-weight: bold">{{ getRoleName(r.role) }} - {{ r.approver_name }}</span>
+                  <span :style="{ color: r.action === 'approve' ? '#67c23a' : '#f56c6c', marginLeft: '10px' }">{{ r.action === 'approve' ? '通过' : '驳回' }}</span>
+                  <div v-if="r.remark" style="margin-top: 5px; color: #999">备注: {{ r.remark }}</div>
+                </div>
+              </el-timeline-item>
+            </el-timeline>
+          </el-card>
+        </div>
+      `,
+      setup(props) {
+        const quotation = ref({ title: '', cost_baseline_year: new Date().getFullYear(), status: 'draft', details: [], approvalRecords: [] })
+        const route = VueRouter.useRoute()
+
+        const getStatusText = (status) => statusMap[status] || status
+        const getStatusTagType = (status) => statusTagType[status] || 'info'
+        const getRoleName = (role) => {
+          const map = { finance: '财务', sales: '销售', business_manager: '业务主管', finance_manager: '财务主管' }
+          return map[role] || role
+        }
+
+        const loadData = async () => {
+          try {
+            const id = route.params.id
+            const res = await quotationApi.getById(id)
+            quotation.value = res.data
+          } catch (e) {
+            ElMessage.error('加载失败')
+          }
+        }
+
+        onMounted(loadData)
+        return { quotation, getStatusText, getStatusTagType, getRoleName }
+      }
+    }
+
+    const ApprovalView = {
+      template: `
+        <div class="page-content">
+          <el-card>
+            <template #header>
+              <div class="flex justify-between items-center">
+                <span>审批流程</span>
+                <el-select v-model="currentRoleFilter" placeholder="选择角色查看">
+                  <el-option label="全部" value="" />
+                  <el-option label="财务审核" value="finance" />
+                  <el-option label="销售审核" value="sales" />
+                  <el-option label="业务主管审核" value="business_manager" />
+                  <el-option label="财务主管审核" value="finance_manager" />
+                </el-select>
+              </div>
+            </template>
+            <el-table :data="tableData" style="width: 100%">
+              <el-table-column prop="code" label="报价单号" width="150" />
+              <el-table-column prop="title" label="标题" />
+              <el-table-column prop="customer_name" label="客户名称" width="120" />
+              <el-table-column prop="total_cost" label="完全成本" width="120">
+                <template #default="scope">{{ (scope.row.total_cost || 0).toFixed(2) }}</template>
+              </el-table-column>
+              <el-table-column prop="price_after_markup" label="加成后价格" width="120">
+                <template #default="scope">{{ (scope.row.price_after_markup || 0).toFixed(2) }}</template>
+              </el-table-column>
+              <el-table-column prop="final_price" label="最终定价" width="120">
+                <template #default="scope">{{ (scope.row.final_price || 0).toFixed(2) }}</template>
+              </el-table-column>
+              <el-table-column prop="status" label="当前状态" width="150">
+                <template #default="scope">
+                  <el-tag :type="getStatusTagType(scope.row.status)">{{ getStatusText(scope.row.status) }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="200">
+                <template #default="scope">
+                  <el-button size="small" @click="viewDetail(scope.row)">查看</el-button>
+                  <el-button v-if="canApprove(scope.row)" size="small" type="primary" @click="openApprovalDialog(scope.row)">审批</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-card>
+          <el-dialog v-model="dialogVisible" :title="'审批 - ' + currentQuotation?.code" width="600px">
+            <el-form :model="approvalForm" label-width="100px">
+              <el-form-item label="审核动作">
+                <el-radio-group v-model="approvalForm.action">
+                  <el-radio label="approve">通过</el-radio>
+                  <el-radio label="reject">驳回</el-radio>
+                </el-radio-group>
+              </el-form-item>
+              <el-form-item v-if="approvalForm.action === 'approve' && currentApprovalRole === 'finance'" label="加成率(%)">
+                <el-input-number v-model="approvalForm.markup_rate" :min="0" :max="100" step="0.5" />
+              </el-form-item>
+              <el-form-item v-if="approvalForm.action === 'approve' && currentApprovalRole === 'sales'" label="最终定价">
+                <el-input-number v-model="approvalForm.final_price" :min="0" step="0.01" />
+              </el-form-item>
+              <el-form-item label="审核人">
+                <el-input v-model="approvalForm.approver_name" placeholder="请输入审核人姓名" />
+              </el-form-item>
+              <el-form-item label="备注">
+                <el-input v-model="approvalForm.remark" type="textarea" placeholder="请输入审核意见" />
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="dialogVisible = false">取消</el-button>
+              <el-button type="primary" @click="submitApproval">提交审核</el-button>
+            </template>
+          </el-dialog>
+        </div>
+      `,
+      setup() {
+        const tableData = ref([])
+        const dialogVisible = ref(false)
+        const currentQuotation = ref(null)
+        const currentApprovalRole = ref('')
+        const currentRoleFilter = ref('')
+        const approvalForm = ref({ action: 'approve', markup_rate: 10, final_price: 0, approver_name: '', remark: '' })
+        const router = VueRouter.useRouter()
+
+        const getStatusText = (status) => statusMap[status] || status
+        const getStatusTagType = (status) => statusTagType[status] || 'info'
+
+        const canApprove = (row) => {
+          const filter = currentRoleFilter.value || localStorage.getItem('currentRole') || 'engineer'
+          return row.status === roleToStatus[filter]
+        }
+
+        const loadData = async () => {
+          const filter = currentRoleFilter.value || localStorage.getItem('currentRole') || 'engineer'
+          const status = roleToStatus[filter]
+          if (!status) { tableData.value = []; return }
+          try {
+            const res = await quotationApi.getAll({ status })
+            tableData.value = res.data
+          } catch (e) {
+            ElMessage.error('加载失败')
+          }
+        }
+
+        const viewDetail = (row) => {
+          router.push(`/quotation/${row.id}`)
+        }
+
+        const openApprovalDialog = (row) => {
+          currentQuotation.value = row
+          currentApprovalRole.value = currentRoleFilter.value || localStorage.getItem('currentRole') || 'engineer'
+          approvalForm.value = { action: 'approve', markup_rate: 10, final_price: row.price_after_markup || 0, approver_name: '', remark: '' }
+          dialogVisible.value = true
+        }
+
+        const submitApproval = async () => {
+          if (!currentQuotation.value || !approvalForm.value.approver_name) {
+            ElMessage.warning('请填写审核人姓名')
+            return
+          }
+          try {
+            const role = currentApprovalRole.value
+            if (role === 'finance') {
+              await approvalApi.finance(currentQuotation.value.id, { action: approvalForm.value.action, markup_rate: approvalForm.value.markup_rate, approver_name: approvalForm.value.approver_name, remark: approvalForm.value.remark })
+            } else if (role === 'sales') {
+              await approvalApi.sales(currentQuotation.value.id, { action: approvalForm.value.action, final_price: approvalForm.value.final_price, approver_name: approvalForm.value.approver_name, remark: approvalForm.value.remark })
+            } else if (role === 'business_manager') {
+              await approvalApi.businessManager(currentQuotation.value.id, { action: approvalForm.value.action, approver_name: approvalForm.value.approver_name, remark: approvalForm.value.remark })
+            } else if (role === 'finance_manager') {
+              await approvalApi.financeManager(currentQuotation.value.id, { action: approvalForm.value.action, approver_name: approvalForm.value.approver_name, remark: approvalForm.value.remark })
+            }
+            ElMessage.success('审核成功')
+            dialogVisible.value = false
+            loadData()
+          } catch (e) {
+            ElMessage.error('审核失败')
+          }
+        }
+
+        watch(currentRoleFilter, loadData)
+        onMounted(loadData)
+        return { tableData, currentRoleFilter, dialogVisible, currentQuotation, currentApprovalRole, approvalForm, getStatusText, getStatusTagType, canApprove, loadData, viewDetail, openApprovalDialog, submitApproval }
+      }
+    }
+
+    const App = {
+      template: `
+        <el-container style="height: 100vh">
+          <el-aside width="200px" style="background-color: #304156">
+            <div class="logo">试制报价系统</div>
+            <el-menu :default-active="activeMenu" class="el-menu-vertical-demo" @select="handleMenuSelect">
+              <el-menu-item index="/"><el-icon><Document /></el-icon><span>报价单列表</span></el-menu-item>
+              <el-menu-item index="/create-quotation"><el-icon><Plus /></el-icon><span>创建报价单</span></el-menu-item>
+              <el-menu-item index="/cost-baseline"><el-icon><Wallet /></el-icon><span>成本基线管理</span></el-menu-item>
+              <el-menu-item index="/work-process"><el-icon><Setting /></el-icon><span>工作环节管理</span></el-menu-item>
+              <el-menu-item index="/approval"><el-icon><CheckCircle /></el-icon><span>审批流程</span></el-menu-item>
+            </el-menu>
+          </el-aside>
+          <el-container>
+            <el-header style="background-color: #fff; border-bottom: 1px solid #e0e0e0; display: flex; align-items: center; justify-content: space-between">
+              <div>
+                <el-breadcrumb separator="/">
+                  <el-breadcrumb-item :to="{ path: '/' }">首页</el-breadcrumb-item>
+                  <el-breadcrumb-item>{{ currentPageName }}</el-breadcrumb-item>
+                </el-breadcrumb>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px">
+                <el-select v-model="currentRole" placeholder="选择角色" style="width: 120px">
+                  <el-option label="工程师" value="engineer" />
+                  <el-option label="财务" value="finance" />
+                  <el-option label="销售" value="sales" />
+                  <el-option label="业务主管" value="business_manager" />
+                  <el-option label="财务主管" value="finance_manager" />
+                </el-select>
+                <span>{{ currentRoleName }}</span>
+              </div>
+            </el-header>
+            <el-main><router-view /></el-main>
+          </el-container>
+        </el-container>
+      `,
+      setup() {
+        const currentRole = ref(localStorage.getItem('currentRole') || 'engineer')
+        const roleNamesMap = { engineer: '工程师', finance: '财务', sales: '销售', business_manager: '业务主管', finance_manager: '财务主管' }
+        const router = VueRouter.useRouter()
+        const route = VueRouter.useRoute()
+        
+        watch(currentRole, (val) => {
+          localStorage.setItem('currentRole', val)
+        })
+
+        const currentRoleName = computed(() => roleNamesMap[currentRole.value] || '')
+        const activeMenu = computed(() => route.path || '/')
+        const pageNames = { '/': '报价单列表', '/create-quotation': '创建报价单', '/cost-baseline': '成本基线管理', '/work-process': '工作环节管理', '/approval': '审批流程' }
+        const currentPageName = computed(() => pageNames[activeMenu.value] || '')
+
+        const handleMenuSelect = (index) => {
+          router.push(index)
+        }
+
+        return { currentRole, currentRoleName, activeMenu, currentPageName, handleMenuSelect }
+      }
+    }
+
+    const router = createRouter({
+      history: createWebHashHistory(),
+      routes: [
+        { path: '/', component: QuotationListView },
+        { path: '/cost-baseline', component: CostBaselineView },
+        { path: '/work-process', component: WorkProcessView },
+        { path: '/create-quotation', component: CreateQuotationView },
+        { path: '/quotation/:id', component: QuotationDetailView },
+        { path: '/approval', component: ApprovalView }
+      ]
+    })
+
+    createApp(App).use(router).use(ElementPlus).mount('#app')
+  </script>
+</body>
+</html>
