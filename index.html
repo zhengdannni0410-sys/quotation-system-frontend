@@ -28,7 +28,7 @@
     const { createRouter, createWebHashHistory } = VueRouter
     const { ElMessage, ElMessageBox } = ElementPlus
 
-    const API_BASE = '/api'
+    const API_BASE = 'https://quotation-system-backend-tau.vercel.app/api'
 
     const costBaselineApi = {
       getAll: () => axios.get(`${API_BASE}/cost-baseline`),
