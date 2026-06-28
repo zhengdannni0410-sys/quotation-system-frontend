@@ -458,6 +458,7 @@
 
         const addWorkProcess = () => {
           form.value.details.push({ work_process_id: 0, work_process_name: '', machine_hours: 0, labor_hours: 0, labor_count: 1, machine_cost: 0, labor_cost: 0 })
+          calculateCost()
         }
 
         const removeWorkProcess = (index) => {
@@ -515,6 +516,7 @@
         }
 
         onMounted(loadData)
+        watch(() => form.value.cost_baseline_year, calculateCost)
         return { form, workProcesses, availableYears, totalMachineCost, totalLaborCost, totalOverhead, totalUtility, totalCost, addWorkProcess, removeWorkProcess, onProcessChange, calculateCost, resetForm, saveDraft, submitQuotation }
       }
     }
