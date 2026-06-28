@@ -448,10 +448,15 @@
 
         const loadData = async () => {
           try {
+            console.log('开始加载数据...')
             const [bRes, pRes] = await Promise.all([costBaselineApi.getAll(), workProcessApi.getAll()])
             costBaselines.value = bRes.data
             workProcesses.value = pRes.data
+            console.log('成本基线数据:', costBaselines.value)
+            console.log('工作环节数据:', workProcesses.value)
+            console.log('工作环节数量:', workProcesses.value.length)
           } catch (e) {
+            console.error('加载数据失败:', e)
             ElMessage.error('加载失败')
           }
         }
